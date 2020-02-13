@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+# -*- coding: utf8 -*-
+
+"""
+    openpush-client is a console client for Openpush API.
+
+    openpush-client [--push-api=http://localhost:5000]
+        --admin-name=foo --admin-password=bar
+        user add name=some-username password=some-password
+
+        --user-name=some-username --user-password=some-password
+        client add name=my-phone
+
+        --client-token=my-phone-token
+        application add id=app-id'
+
+        --token=routing-token
+        message publish data="lorem ipsum"
+"""
+
+#TODO: accept json input (stdin) as alternative to command params
+#TODO: use openapi spec to generate client dynamically
+
+import sys
+import argparse
+import requests
+
+
+#
+ITEMS = ['user', 'client']
+
+# requests verbs matching commands
+VERBS= {
+    'add': 'post',
+    'list': 'get'
+}
+
+def user(args, remains):
+    print('user', args)
+    return
+
+    uri  = f'{args.push_api}/user'
+    auth = (args.auth_username, args.auth_password)
+    payload = dict([param.split('=') for param in remains])
+    print(payload)
+
+    r = getattr(requests, VERBS[args.action])(uri, auth=auth, json=payload)
+    print(r.status_code, r.text)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Arrow cli')
+    parser.add_argument('--push-api', type=str, dest='push_api',
+        default='http://localhost:5000')
+    subparsers = parser.add_subparsers(help='sub-commands help')
+    # user options
+    u_parser = subparsers.add_parser('user')
+    u_parser.add_argument('--admin-name', dest='auth_username')
+    u_parser.add_argument('--admin-password', dest='auth_password')
+    u_parser.add_argument('action', type=str, choices=('add','list'))
+    u_parser.set_defaults(func=user)
+
+    args, remains = parser.parse_known_args()
+    #print(args, remains)
+    if not hasattr(args, 'func'):
+        print('no command set. Exiting...'); sys.exit(1)
+    args.func(args, remains)
+
