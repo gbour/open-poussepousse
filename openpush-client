@@ -54,17 +54,39 @@ ENDPOINTS = [
         },
         'actions': ['add', 'list', 'del']
     },
+    {
+        'name': 'message',
+        'actions': ['publish']
+    },
 ]
 
 # requests verbs matching commands
 VERBS= {
-    'add': 'post',
-    'list': 'get',
-    'get': 'get',
-    'del': 'delete',
+    'list'   : 'get',
+    'add'    : 'post',
+    'get'    : 'get',
+    'del'    : 'delete',
+    'publish': 'post',
 }
 
+def build_payload(params):
+    ''' build API request payload from command params. '''
+    # foo.bar=baz => {'foo.bar': 'baz'} => {'foo': {'bar': 'baz'}
+    payload = {}
+
+    for param in params:
+        k, v = param.split('=')
+
+        mdict = payload
+        kparts = k.split('.')
+        for kpart in kparts[:-1]:
+            mdict = mdict.setdefault(kpart, {})
+        mdict[kparts[-1]] = v
+
+    return payload
+
 def api(item):
+    ''' '''
     def _call(args, remains):
         print(item, args, remains)
         uri  = f'{args.push_api}/{item}'
@@ -77,11 +99,11 @@ def api(item):
             auth = (args.auth_username, args.auth_password)
         elif hasattr(args, 'auth_token'):
             headers['X-Openpush-Key'] = args.auth_token
-        payload = dict([param.split('=') for param in remains])
+        payload = build_payload(remains)
         action = getattr(args, 'action', 'list')
         verb = VERBS.get(action, 'head')
 
-        #
+        # ACK: for get & del actions, id param is appended at the end of the uri
         if action in ('get', 'del'):
             uri = uri + '/' + payload.get('id', 'none')
         print(verb, uri, auth, headers, payload)
