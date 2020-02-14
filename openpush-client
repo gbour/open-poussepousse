@@ -26,7 +26,6 @@ import argparse
 import requests
 
 
-#
 ITEMS = ['user', 'client']
 
 # requests verbs matching commands
@@ -35,20 +34,22 @@ VERBS= {
     'list': 'get'
 }
 
-def user(args, remains):
-    print('user', args)
-    return
+def api(item):
+    def _call(args, remains):
+        print(item, args, remains)
+        uri  = f'{args.push_api}/{item}'
+        auth = (args.auth_username, args.auth_password)
+        payload = dict([param.split('=') for param in remains])
+        verb = VERBS.get(args.action, 'head')
+        print(verb, uri, auth, payload)
 
-    uri  = f'{args.push_api}/user'
-    auth = (args.auth_username, args.auth_password)
-    payload = dict([param.split('=') for param in remains])
-    print(payload)
+        r = getattr(requests, verb)(uri, auth=auth, json=payload)
+        print(r.status_code, r.text)
 
-    r = getattr(requests, VERBS[args.action])(uri, auth=auth, json=payload)
-    print(r.status_code, r.text)
+    return _call
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Arrow cli')
+    parser = argparse.ArgumentParser(description='openpush client')
     parser.add_argument('--push-api', type=str, dest='push_api',
         default='http://localhost:5000')
     subparsers = parser.add_subparsers(help='sub-commands help')
@@ -57,7 +58,7 @@ if __name__ == '__main__':
     u_parser.add_argument('--admin-name', dest='auth_username')
     u_parser.add_argument('--admin-password', dest='auth_password')
     u_parser.add_argument('action', type=str, choices=('add','list'))
-    u_parser.set_defaults(func=user)
+    u_parser.set_defaults(func=api('user'))
 
     args, remains = parser.parse_known_args()
     #print(args, remains)
