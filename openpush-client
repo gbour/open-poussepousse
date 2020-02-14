@@ -27,23 +27,66 @@ import requests
 
 
 ITEMS = ['user', 'client']
+ENDPOINTS = [
+    {
+        'name': 'version',
+    },
+    {
+        'name': 'user',
+        'auth': {
+            'mode': 'admin',
+            'optional': True
+        },
+        'actions': ['add', 'list', 'get', 'del']
+    },
+    {
+        'name': 'client',
+        'auth': {
+            'mode': 'basic',
+            'optional': True
+        },
+        'actions': ['add', 'list', 'del']
+    },
+    {
+        'name': 'application',
+        'auth': {
+            'mode': 'token'
+        },
+        'actions': ['add', 'list', 'del']
+    },
+]
 
 # requests verbs matching commands
 VERBS= {
     'add': 'post',
-    'list': 'get'
+    'list': 'get',
+    'get': 'get',
+    'del': 'delete',
 }
 
 def api(item):
     def _call(args, remains):
         print(item, args, remains)
         uri  = f'{args.push_api}/{item}'
-        auth = (args.auth_username, args.auth_password)
-        payload = dict([param.split('=') for param in remains])
-        verb = VERBS.get(args.action, 'head')
-        print(verb, uri, auth, payload)
 
-        r = getattr(requests, verb)(uri, auth=auth, json=payload)
+        headers = {}
+        auth = None
+        if hasattr(args, 'admin_username'):
+            auth = (args.admin_username, args.admin_password)
+        elif hasattr(args, 'auth_username'):
+            auth = (args.auth_username, args.auth_password)
+        elif hasattr(args, 'auth_token'):
+            headers['X-Openpush-Key'] = args.auth_token
+        payload = dict([param.split('=') for param in remains])
+        action = getattr(args, 'action', 'list')
+        verb = VERBS.get(action, 'head')
+
+        #
+        if action in ('get', 'del'):
+            uri = uri + '/' + payload.get('id', 'none')
+        print(verb, uri, auth, headers, payload)
+
+        r = getattr(requests, verb)(uri, auth=auth, headers=headers, json=payload)
         print(r.status_code, r.text)
 
     return _call
@@ -53,12 +96,22 @@ if __name__ == '__main__':
     parser.add_argument('--push-api', type=str, dest='push_api',
         default='http://localhost:5000')
     subparsers = parser.add_subparsers(help='sub-commands help')
-    # user options
-    u_parser = subparsers.add_parser('user')
-    u_parser.add_argument('--admin-name', dest='auth_username')
-    u_parser.add_argument('--admin-password', dest='auth_password')
-    u_parser.add_argument('action', type=str, choices=('add','list'))
-    u_parser.set_defaults(func=api('user'))
+
+    for ep in ENDPOINTS:
+        subparser = subparsers.add_parser(ep['name'])
+        if 'auth' in ep:
+            if ep['auth']['mode'] == 'admin':
+                subparser.add_argument('--admin-username')
+                subparser.add_argument('--admin-password')
+            elif ep['auth']['mode'] == 'basic':
+                subparser.add_argument('--auth-username')
+                subparser.add_argument('--auth-password')
+            elif ep['auth']['mode'] == 'token':
+                subparser.add_argument('--auth-token')
+
+        if 'actions' in ep:
+            subparser.add_argument('action', type=str, choices=ep['actions'])
+        subparser.set_defaults(func=api(ep['name']))
 
     args, remains = parser.parse_known_args()
     #print(args, remains)
