@@ -1,0 +1,4 @@
+flask>=1.0
+sqlalchemy
+flask_sqlalchemy
+https://gitlab.com/Bubu/pushserver.git

@@ -1,0 +1,208 @@
+#!/usr/bin/env python
+# -*- coding: utf8 -*-
+
+# WARNING: this app is not production ready
+#
+# open-poussepousse is implementing the push server side of openpush protocol.
+# It use the database created and managed by openpush api daemon.
+
+# TODO: how to sync app list of connected clients
+#       (a new app is added on api side while client is already connected)
+#       regular polling ?
+
+import sys
+import select
+import socket
+import signal
+import argparse
+
+import json
+#import msgpack
+import sqlalchemy
+from flask import Flask
+from orm import db, Message, Application, Client
+
+app = Flask(__name__)
+
+DEBUG = False
+
+APPS = {}
+CONNS = {}
+
+def cleanup(c):
+    if c not in CONNS:
+        return
+
+    for app in CONNS.get(c, []):
+        del APPS[app]
+
+    del CONNS[c]
+
+def error(msg):
+    ''' generates *error* message. '''
+    return ('error', {'msg': msg})
+
+def msg_connect(msg, conn):
+    ''' handle received *connect* message. '''
+    if 'token' not in msg:
+        return error('token field missing')
+
+    try:
+        client = db.session.query(Client)\
+            .filter(Client.token == msg['token'])\
+            .one()
+    except sqlalchemy.orm.exc.NoResultFound:
+        return error('client not found')
+
+    print('connect', client.name, client.applications)
+    for app in client.applications:
+        APPS[app.routing_token] = conn
+    CONNS[conn] = [app.routing_token for app in client.applications]
+
+    # TODO: checks if we have undelivered messages for client apps
+
+def pack_msg(cmd, params):
+    ''' prepare a message to be sent. '''
+    print('pack', cmd, params)
+    msg = {'cmd': cmd}
+    msg.update(params)
+
+    return json.dumps(msg).encode('utf8')
+
+def handle_msg(raw, conn):
+    ''' handle received message. '''
+    try:
+        msg = json.loads(raw)
+        print(f'msg= {msg}')
+ 
+        if 'cmd' not in msg:
+            ret = error('unknown message command')
+
+        # WARNING: not safe
+        print(f'msg_{msg["cmd"]}', eval(f'msg_{msg["cmd"]}'))
+        ret = eval(f'msg_{msg["cmd"]}')(msg, conn)
+        if ret is None:
+            ret = ('connack', {})
+    except TypeError:
+        print(f'{raw} not a valid json')
+        ret = error('not valid json message')
+    except json.decoder.JSONDecodeError:
+        print(f'{raw} not a valid json')
+        ret = error('not valid json message')
+    except NameError as e:
+        print(e)
+        ret = error(f'unknown {msg["cmd"]} message command')
+
+    return ret
+
+def deliver(conn, routing_token, raw_msg):
+    ''' deliver message to connection. '''
+    print(f'delivering {raw_msg.data} to {conn} (routing_token={routing_token})')
+
+    #msg = {'type': 'message', 'routing_token': routing_token, 'payload': json.loads(raw_msg.data)}
+    msg = {'cmd': 'message', 'routing_token': routing_token, 'payload': raw_msg.data}
+
+    conn.send(json.dumps(msg).encode('utf8'))
+    return True
+
+def notify_messages():
+    ''' poll Messages table and send messages to connected apps. '''
+    for conn, apps in CONNS.items():
+        for routing_token in apps:
+            try:
+                msgs = db.session.query(Message)\
+                    .join(Message.target, Application.client)\
+                    .filter(Application.routing_token == routing_token)\
+                    .order_by(Message.timestamp)\
+                    .all()
+
+                for m in msgs:
+                    if deliver(conn, routing_token, m):
+                        db.session.delete(m)
+                        db.session.commit()
+
+            except sqlalchemy.orm.exc.NoResultFound:
+                print('no result')
+
+
+running = True
+
+def startserver():
+    ''' starts server, listening on port 5001. '''
+    global running
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("0.0.0.0", 5001))
+    sock.listen(5)
+
+    readers = [sock]
+    while running:
+        r, w, e = select.select(readers, [], [], 5)
+
+        # new client connection
+        if sock in r:
+            r.remove(sock)
+            (csock, addr) = sock.accept()
+            print(f'new connection from {addr}')
+            readers.append(csock)
+
+        # clients messages
+        for c in r:
+            try:
+                data = c.recv(8192)
+            except ConnectionResetError:
+                data = ""
+
+            if len(data) == 0:
+                cleanup(c)
+                c.close(); readers.remove(c)
+                continue
+
+            response = handle_msg(data, c)
+            if response == None:
+                cleanup(c)
+                c.close(); readers.remove(c)
+                continue
+
+            c.send(pack_msg(*response))
+
+        notify_messages()
+
+    sock.close()
+    readers.remove(sock)
+    for r in readers:
+        r.send(json.dumps({'type': 'disconnect'}).encode('utf8'))
+        r.close()
+
+
+def stop_server():
+    ''' stop running server. '''
+    global running
+
+    print('shutting down...')
+    running = False
+
+
+def signal_handler(sig, frame):
+    ''' on SIGINT signal, stop server. '''
+    stop_server()
+signal.signal(signal.SIGINT, signal_handler)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='open-poussepousse : Openpush push server')
+    parser.add_argument('--db', type=str)
+    parser.add_argument('--debug', action='store_true')
+
+    args = parser.parse_args()
+
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + args.db
+    if args.debug:
+        app.config['SQLALCHEMY_ECHO'] = True
+    #print('path=', sys.argv[1], app.config['SQLALCHEMY_DATABASE_URI'])
+    #import ipdb; ipdb.set_trace()
+    app.app_context().push()
+    db.init_app(app)
+    db.create_all()
+
+    startserver()
