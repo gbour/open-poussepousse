@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+# deploy openpush api server and poussepousse push server
+# 
+set -o errexit
+set -o errtrace
+set -o nounset
+set -o pipefail
+#set -o xtrace
+
+apt update && apt install -y uuid apg curl jq sqlite3
+
+# docker install
+apt install -y \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg2 \
+    software-properties-common
+
+curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add -
+add-apt-repository \
+   "deb [arch=amd64] https://download.docker.com/linux/debian \
+   $(lsb_release -cs) \
+   stable"
+apt update
+apt install -y docker-ce
+
+# setup _local_ docker swarm
+docker swarm init --advertise-addr 127.0.0.1 --listen-addr 127.0.0.1 || true
+
+# generates secrets
+uuid | docker secret create openpush_api_admin_username - || true
+apg -a1 -m32 -n1 -E '"&' | docker secret create openpush_api_admin_password - || true
+
+# starts applications
+docker stack deploy -c ./docker-compose.yml openpush

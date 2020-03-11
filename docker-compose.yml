@@ -1,0 +1,38 @@
+version: '3.7'
+
+services:
+  api:
+    image: rg.fr-par.scw.cloud/oppp/openpush-api:latest
+    volumes:
+      - type: volume
+        source: openpush-data
+        target: /data
+    ports:
+      - "5000:5000"
+    environment:
+      DEBUG: "true"
+    secrets:
+      - api_admin_username
+      - api_admin_password
+  push:
+    image: rg.fr-par.scw.cloud/oppp/open-poussepousse:latest
+    volumes:
+       - "openpush-data:/data"
+    ports:
+      - "5001:5001"
+    environment:
+      DEBUG: "true"
+    depends_on:
+      - "api"
+
+
+secrets:
+  api_admin_username:
+    external: True
+    name: 'openpush_api_admin_username'
+  api_admin_password:
+    external: True
+    name: 'openpush_api_admin_password'
+
+volumes:
+  openpush-data:
