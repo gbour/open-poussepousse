@@ -1,14 +1,53 @@
 #!/usr/bin/env bash
 
-# deploy openpush api server and poussepousse push server
+# Deploy openpush api server and poussepousse push server
 # 
 set -o errexit
 set -o errtrace
 set -o nounset
 set -o pipefail
-#set -o xtrace
 
-apt update && apt install -y uuid apg curl jq sqlite3
+
+basedir=$(dirname $0)
+
+usage() {
+    1>&2 cat <<-EOF
+    Usage: > $(basename $0) [OPTION] -e EMAIL -d DOMAIN
+    Deploy openpush server
+
+    Arguments are:
+     -h     displays this help message
+     -v     verbose mode (for debugging)
+     -e     email address (letsencrypt registration)
+     -d     domain name of your server (letsencrypt certificate)
+
+    Example usage:
+     > deploy -e jdoe@example.com -d endoftheinternet.com
+EOF
+    exit 1
+}
+
+while getopts "hve:d:" opt; do
+   case "$opt" in
+      h)
+         usage
+         exit 0
+         ;;
+      v) set -o xtrace
+         ;;
+      e) EMAIL=$OPTARG
+         ;;
+      d) DOMAIN=$OPTARG
+         ;;
+   esac
+done
+
+if [[ -z ${EMAIL+z} || -z ${DOMAIN+z} ]]; then
+  usage; exit 0
+fi
+
+
+apt update && apt install -y uuid apg curl jq sqlite3 sed
 
 # docker install
 apt install -y \
@@ -20,9 +59,9 @@ apt install -y \
 
 curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add -
 add-apt-repository \
-   "deb [arch=amd64] https://download.docker.com/linux/debian \
-   $(lsb_release -cs) \
-   stable"
+    "deb [arch=amd64] https://download.docker.com/linux/debian \
+    $(lsb_release -cs) \
+    stable"
 apt update
 apt install -y docker-ce
 
@@ -30,8 +69,30 @@ apt install -y docker-ce
 docker swarm init --advertise-addr 127.0.0.1 --listen-addr 127.0.0.1 || true
 
 # generates secrets
-uuid | docker secret create openpush_api_admin_username - || true
-apg -a1 -m32 -n1 -E '"&' | docker secret create openpush_api_admin_password - || true
+docker secret inspect openpush_api_admin_username >/dev/null 2>&1 || \
+    uuid | docker secret create openpush_api_admin_username -
+docker secret inspect openpush_api_admin_password >/dev/null 2>&1 || \
+    apg -a1 -m32 -n1 -E '"&' | docker secret create openpush_api_admin_password -
+
+# create temporary self-signed certificate
+for volume in openpush_certbot-data openpush_certbot-www; do
+    docker volume inspect $volume >/dev/null 2>&1 || docker volume create $volume
+done
+
+path=$(docker volume inspect openpush_certbot-data|jq -r '.[].Mountpoint')
+
+## download certbot recommended tls settings
+curl -o $path/options-ssl-nginx.conf \
+    https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf
+curl -o $path/ssl-dhparams.pem \
+    https://raw.githubusercontent.com/certbot/certbot/master/certbot/certbot/ssl-dhparams.pem
+
+## bootstrap letsencrypt certificate
+docker run --rm -p 80:80 -v $path:/etc/letsencrypt --entrypoint="" certbot/certbot \
+    certbot certonly --standalone -w /tmp --rsa-key-size 2048 --agree-tos \
+      --force-renewal -d $DOMAIN --email $EMAIL
+
+sed -e "s/DOMAIN/$DOMAIN/g" $basedir/data/nginx/scw.conf.tmpl > $basedir/data/nginx/scw.conf
 
 # starts applications
-docker stack deploy -c ./docker-compose.yml openpush
+docker stack deploy -c $basedir/docker-compose.yml openpush
